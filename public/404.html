@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Garten Gruppen App</title>
+  </head>
+  <body>
+    <script>
+      const { pathname, search, hash } = window.location
+      const segments = pathname.split('/').filter(Boolean)
+      const repoBase = segments.length > 0 ? `/${segments[0]}/` : '/'
+      const rest = pathname.startsWith(repoBase) ? pathname.slice(repoBase.length - 1) : pathname
+      const redirectTarget = `${repoBase}?p=${encodeURIComponent(`${rest}${search}${hash}`)}`
+      window.location.replace(redirectTarget)
+    </script>
+  </body>
+</html>
