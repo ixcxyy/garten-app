@@ -1,15 +1,16 @@
+import { Chrome, Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { AuthLayout } from '../components/AuthLayout'
 import { FullPageLoader } from '../components/FullPageLoader'
 import { useAppStore } from '../hooks/useAppStore'
-import { inputClass, primaryButtonClass } from '../lib/ui'
+import { inputClass, primaryButtonClass, secondaryButtonClass } from '../lib/ui'
 import { resolveRedirectPath } from '../lib/utils'
 
 export function RegisterPage() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { currentUser, isReady, registerUser } = useAppStore()
+  const { currentUser, error: storeError, isReady, loginWithGoogle, registerUser } = useAppStore()
   const [form, setForm] = useState({
     username: '',
     firstName: '',
@@ -19,8 +20,9 @@ export function RegisterPage() {
   })
   const [error, setError] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isGoogleSubmitting, setIsGoogleSubmitting] = useState(false)
 
-  if (!isReady) {
+  if (!isReady && !storeError) {
     return <FullPageLoader label="Registrierung und Daten werden vorbereitet..." />
   }
 
@@ -54,6 +56,24 @@ export function RegisterPage() {
     }
   }
 
+  async function handleGoogleRegister() {
+    setError('')
+    setIsGoogleSubmitting(true)
+
+    try {
+      await loginWithGoogle()
+      navigate(resolveRedirectPath(location.search), { replace: true })
+    } catch (submissionError) {
+      setError(
+        submissionError instanceof Error
+          ? submissionError.message
+          : 'Google-Registrierung war nicht moeglich.',
+      )
+    } finally {
+      setIsGoogleSubmitting(false)
+    }
+  }
+
   return (
     <AuthLayout
       title="Konto erstellen"
@@ -70,6 +90,33 @@ export function RegisterPage() {
         </span>
       }
     >
+      {storeError ? (
+        <div className="mb-5 rounded-[24px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+          <div className="flex items-center gap-2 font-semibold">
+            <Sparkles className="h-4 w-4" />
+            Firebase braucht noch Aufmerksamkeit
+          </div>
+          <p className="mt-2">{storeError}</p>
+        </div>
+      ) : null}
+
+      <div className="space-y-3">
+        <button
+          type="button"
+          className={secondaryButtonClass}
+          onClick={handleGoogleRegister}
+          disabled={isGoogleSubmitting || isSubmitting}
+        >
+          <Chrome className="h-4 w-4" />
+          {isGoogleSubmitting ? 'Google wird verbunden...' : 'Mit Google fortfahren'}
+        </button>
+        <div className="flex items-center gap-3 text-xs font-semibold uppercase tracking-[0.22em] text-stone-400">
+          <span className="h-px flex-1 bg-olive-100" />
+          oder klassisch registrieren
+          <span className="h-px flex-1 bg-olive-100" />
+        </div>
+      </div>
+
       <form className="space-y-4" onSubmit={handleSubmit}>
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
@@ -147,6 +194,11 @@ export function RegisterPage() {
         <button type="submit" className={primaryButtonClass} disabled={isSubmitting}>
           {isSubmitting ? 'Konto wird erstellt...' : 'Registrieren'}
         </button>
+
+        <p className="text-xs leading-6 text-stone-500">
+          Wenn Google aktiviert ist, wird beim ersten Login automatisch ein Profil aus deinem
+          Namen und deiner E-Mail angelegt.
+        </p>
       </form>
     </AuthLayout>
   )

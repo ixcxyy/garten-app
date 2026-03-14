@@ -9,10 +9,12 @@ import {
   getMembersForGroup,
   getMembership,
   getSnapshot,
+  getStoreError,
   isStoreReady,
   getTodosForGroup,
   joinGroupByInviteCode,
   login,
+  loginWithGoogle,
   logout,
   registerUser,
   subscribe,
@@ -24,6 +26,7 @@ export function useAppStore() {
   const [storeState, setStoreState] = useState(() => ({
     snapshot: getSnapshot(),
     isReady: isStoreReady(),
+    error: getStoreError(),
   }))
 
   useEffect(() => {
@@ -32,12 +35,13 @@ export function useAppStore() {
         setStoreState({
           snapshot: getSnapshot(),
           isReady: isStoreReady(),
+          error: getStoreError(),
         })
       })
     })
   }, [])
 
-  const { snapshot, isReady } = storeState
+  const { snapshot, isReady, error } = storeState
   const currentUser = getCurrentUser(snapshot)
   const groups = currentUser
     ? getGroupsForUser(currentUser.id, snapshot).map((group) => {
@@ -106,12 +110,14 @@ export function useAppStore() {
   return {
     snapshot,
     isReady,
+    error,
     currentUser,
     groups,
     getGroupView,
     getInvitePreview,
     registerUser,
     login,
+    loginWithGoogle,
     logout,
     createGroup,
     joinGroupByInviteCode,

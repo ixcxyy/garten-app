@@ -2,8 +2,10 @@ import { FirebaseError } from 'firebase/app'
 import {
   createUserWithEmailAndPassword,
   deleteUser,
+  GoogleAuthProvider,
   onAuthStateChanged,
   signInWithEmailAndPassword,
+  signInWithPopup,
   signOut,
   type User,
 } from 'firebase/auth'
@@ -60,6 +62,12 @@ let loadState = { ...initialLoadState }
 let syncStarted = false
 let authCleanup: (() => void) | null = null
 let dataCleanupCallbacks: Array<() => void> = []
+let storeError: string | null = null
+
+const googleProvider = new GoogleAuthProvider()
+googleProvider.setCustomParameters({
+  prompt: 'select_account',
+})
 
 function isBrowser() {
   return typeof window !== 'undefined'
@@ -93,6 +101,11 @@ function markLoaded(key: keyof typeof initialLoadState) {
     ...loadState,
     [key]: true,
   }
+  emitChange()
+}
+
+function setStoreError(message: string | null) {
+  storeError = message
   emitChange()
 }
 
@@ -173,23 +186,67 @@ function buildMembershipId(groupId: string, userId: string) {
   return `${groupId}_${userId}`
 }
 
+function getNamePartsFromUser(user: User) {
+  const displayName = user.displayName?.trim()
+
+  if (displayName) {
+    const [firstName, ...rest] = displayName.split(/\s+/)
+
+    return {
+      firstName: firstName || 'Garten',
+      lastName: rest.join(' '),
+    }
+  }
+
+  const emailBase = user.email?.split('@')[0]?.trim() || 'gartenfreund'
+  return {
+    firstName: emailBase,
+    lastName: '',
+  }
+}
+
 function toAppUser(value: AppUser | undefined, authUser: User): AppUser {
   if (value) {
     return value
   }
 
   const email = authUser.email?.trim().toLowerCase() ?? ''
-  const fallbackName = email.split('@')[0] || 'gartenfreund'
+  const { firstName, lastName } = getNamePartsFromUser(authUser)
+  const fallbackName = email.split('@')[0] || firstName || 'gartenfreund'
 
   return {
     id: authUser.uid,
     username: fallbackName.toLowerCase(),
-    firstName: fallbackName,
-    lastName: '',
+    firstName,
+    lastName,
     email,
-    avatar: getAvatarLabel(fallbackName, '', fallbackName),
+    avatar: getAvatarLabel(firstName, lastName, fallbackName),
     createdAt: new Date().toISOString(),
   }
+}
+
+function upsertUserProfile(user: AppUser) {
+  const remainingUsers = snapshot.users.filter((entry) => entry.id !== user.id)
+
+  updateSnapshot({
+    users: [user, ...remainingUsers],
+  })
+}
+
+async function ensureUserProfile(db: Firestore, authUser: User) {
+  const userRef = doc(db, 'users', authUser.uid)
+  const userSnapshot = await getDoc(userRef)
+
+  if (userSnapshot.exists()) {
+    const existingUser = userSnapshot.data() as AppUser
+    upsertUserProfile(existingUser)
+    return existingUser
+  }
+
+  const nextUser = toAppUser(undefined, authUser)
+  await setDoc(userRef, nextUser)
+  upsertUserProfile(nextUser)
+  return nextUser
 }
 
 function startSync() {
@@ -211,52 +268,101 @@ function startSync() {
       return
     }
 
+    setStoreError(null)
+
     dataCleanupCallbacks = [
-      onSnapshot(collection(db, 'users'), (usersSnapshot) => {
-        updateSnapshot({
-          users: usersSnapshot.docs.map((entry) => entry.data() as AppUser),
-        })
-        markLoaded('users')
-      }),
-      onSnapshot(collection(db, 'groups'), (groupsSnapshot) => {
-        updateSnapshot({
-          groups: groupsSnapshot.docs.map((entry) => entry.data() as GardenGroup),
-        })
-        markLoaded('groups')
-      }),
-      onSnapshot(collection(db, 'groupMembers'), (membershipsSnapshot) => {
-        updateSnapshot({
-          groupMembers: membershipsSnapshot.docs.map((entry) => entry.data() as GroupMember),
-        })
-        markLoaded('groupMembers')
-      }),
-      onSnapshot(collection(db, 'todos'), (todosSnapshot) => {
-        updateSnapshot({
-          todos: todosSnapshot.docs.map((entry) => entry.data() as TodoItem),
-        })
-        markLoaded('todos')
-      }),
+      onSnapshot(
+        collection(db, 'users'),
+        (usersSnapshot) => {
+          updateSnapshot({
+            users: usersSnapshot.docs.map((entry) => entry.data() as AppUser),
+          })
+          markLoaded('users')
+        },
+        (error) => {
+          markLoaded('users')
+          setStoreError(toFriendlyError(error).message)
+        },
+      ),
+      onSnapshot(
+        collection(db, 'groups'),
+        (groupsSnapshot) => {
+          updateSnapshot({
+            groups: groupsSnapshot.docs.map((entry) => entry.data() as GardenGroup),
+          })
+          markLoaded('groups')
+        },
+        (error) => {
+          updateSnapshot({
+            groups: [],
+          })
+          markLoaded('groups')
+          setStoreError(toFriendlyError(error).message)
+        },
+      ),
+      onSnapshot(
+        collection(db, 'groupMembers'),
+        (membershipsSnapshot) => {
+          updateSnapshot({
+            groupMembers: membershipsSnapshot.docs.map((entry) => entry.data() as GroupMember),
+          })
+          markLoaded('groupMembers')
+        },
+        (error) => {
+          updateSnapshot({
+            groupMembers: [],
+          })
+          markLoaded('groupMembers')
+          setStoreError(toFriendlyError(error).message)
+        },
+      ),
+      onSnapshot(
+        collection(db, 'todos'),
+        (todosSnapshot) => {
+          updateSnapshot({
+            todos: todosSnapshot.docs.map((entry) => entry.data() as TodoItem),
+          })
+          markLoaded('todos')
+        },
+        (error) => {
+          updateSnapshot({
+            todos: [],
+          })
+          markLoaded('todos')
+          setStoreError(toFriendlyError(error).message)
+        },
+      ),
     ]
   }
 
-  authCleanup = onAuthStateChanged(auth, (user) => {
-    if (user) {
-      startDataSync()
-    } else {
-      stopDataSync()
-      updateSnapshot({
-        users: [],
-        groups: [],
-        groupMembers: [],
-        todos: [],
-      })
-    }
+  authCleanup = onAuthStateChanged(
+    auth,
+    (user) => {
+      setStoreError(null)
 
-    updateSnapshot({
-      currentUserId: user?.uid ?? null,
-    })
-    markLoaded('auth')
-  })
+      if (user) {
+        upsertUserProfile(toAppUser(snapshot.users.find((entry) => entry.id === user.uid), user))
+        startDataSync()
+      } else {
+        stopDataSync()
+        updateSnapshot({
+          users: [],
+          groups: [],
+          groupMembers: [],
+          todos: [],
+        })
+      }
+
+      updateSnapshot({
+        currentUserId: user?.uid ?? null,
+      })
+      markLoaded('auth')
+    },
+    (error) => {
+      setStoreError(toFriendlyError(error).message)
+      markLoaded('auth')
+    },
+  )
 }
 
 async function ensureMembership(db: Firestore, groupId: string, userId: string) {
@@ -330,6 +436,10 @@ export function isStoreReady() {
     return true
   }
 
+  if (storeError && loadState.auth) {
+    return true
+  }
+
   if (!loadState.auth) {
     return false
   }
@@ -361,8 +471,13 @@ export function subscribe(listener: () => void) {
       syncStarted = false
       loadState = { ...initialLoadState }
       snapshot = EMPTY_STATE
+      storeError = null
     }
   }
+}
+
+export function getStoreError() {
+  return storeError
 }
 
 export async function registerUser(payload: RegisterPayload) {
@@ -423,9 +538,18 @@ export async function login(payload: LoginPayload) {
 
   try {
     const credential = await signInWithEmailAndPassword(auth, email, password)
-    const userSnapshot = await getDoc(doc(db, 'users', credential.user.uid))
+    return ensureUserProfile(db, credential.user)
+  } catch (error) {
+    throw toFriendlyError(error)
+  }
+}
 
-    return toAppUser(userSnapshot.data() as AppUser | undefined, credential.user)
+export async function loginWithGoogle() {
+  const { auth, db } = requireServices()
+
+  try {
+    const credential = await signInWithPopup(auth, googleProvider)
+    return ensureUserProfile(db, credential.user)
   } catch (error) {
     throw toFriendlyError(error)
   }

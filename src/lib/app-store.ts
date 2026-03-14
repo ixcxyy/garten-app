@@ -25,6 +25,14 @@ export function isStoreReady() {
   return true
 }
 
+export function getStoreError() {
+  if ('getStoreError' in liveStore) {
+    return liveStore.getStoreError()
+  }
+
+  return null
+}
+
 export function subscribe(listener: () => void) {
   return liveStore.subscribe(listener)
 }
@@ -35,6 +43,16 @@ export function registerUser(payload: RegisterPayload) {
 
 export function login(payload: LoginPayload) {
   return liveStore.login(payload)
+}
+
+export function loginWithGoogle() {
+  if ('loginWithGoogle' in liveStore) {
+    return liveStore.loginWithGoogle()
+  }
+
+  return Promise.reject(
+    new Error('Google-Anmeldung ist nur mit aktiver Firebase-Konfiguration verfuegbar.'),
+  )
 }
 
 export function logout() {
