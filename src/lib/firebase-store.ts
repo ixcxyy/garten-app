@@ -1,6 +1,7 @@
 import { FirebaseError } from 'firebase/app'
 import {
   createUserWithEmailAndPassword,
+  deleteUser,
   onAuthStateChanged,
   signInWithEmailAndPassword,
   signOut,
@@ -129,14 +130,38 @@ function toFriendlyError(error: unknown) {
       return new Error('Bitte gib eine gueltige E-Mail-Adresse ein.')
     case 'auth/weak-password':
       return new Error('Das Passwort ist zu kurz oder zu einfach.')
+    case 'auth/operation-not-allowed':
+      return new Error(
+        'E-Mail/Passwort ist in Firebase Authentication noch nicht aktiviert. Aktiviere in Firebase unter Authentication > Sign-in method den Provider "Email/Password".',
+      )
     case 'auth/invalid-credential':
     case 'auth/user-not-found':
     case 'auth/wrong-password':
       return new Error('Die Zugangsdaten passen nicht zusammen.')
     case 'auth/too-many-requests':
       return new Error('Zu viele Versuche. Bitte warte kurz und probiere es erneut.')
+    case 'permission-denied':
+      return new Error(
+        'Firebase blockiert den Zugriff. Pruefe deine Firestore- oder Storage-Regeln und veroeffentliche sie erneut.',
+      )
+    case 'failed-precondition':
+      return new Error(
+        'Firestore ist noch nicht voll eingerichtet. Lege in Firebase zuerst eine Cloud Firestore Datenbank an.',
+      )
+    case 'unavailable':
+      return new Error('Firebase ist gerade nicht erreichbar. Bitte probiere es gleich noch einmal.')
+    case 'storage/unauthorized':
+      return new Error(
+        'Der Bildupload ist durch Firebase Storage-Regeln blockiert. Pruefe die Storage-Regeln des Projekts.',
+      )
+    case 'storage/bucket-not-found':
+      return new Error(
+        'Der konfigurierte Firebase Storage-Bucket wurde nicht gefunden. Pruefe `VITE_FIREBASE_STORAGE_BUCKET`.',
+      )
     default:
-      return new Error('Firebase hat die Anfrage abgelehnt. Bitte pruefe die Konfiguration.')
+      return new Error(
+        `Firebase hat die Anfrage abgelehnt (${error.code}). Bitte pruefe die Projektkonfiguration in Firebase.`,
+      )
   }
 }
 
@@ -349,15 +374,15 @@ export async function registerUser(payload: RegisterPayload) {
 
   const { auth, db } = requireServices()
 
-  const usersWithUsername = await getDocs(
-    query(collection(db, 'users'), where('username', '==', username), limit(1)),
-  )
-
-  if (!usersWithUsername.empty) {
-    throw new Error('Dieser Username ist bereits vergeben.')
-  }
-
   try {
+    const usersWithUsername = await getDocs(
+      query(collection(db, 'users'), where('username', '==', username), limit(1)),
+    )
+
+    if (!usersWithUsername.empty) {
+      throw new Error('Dieser Username ist bereits vergeben.')
+    }
+
     const credential = await createUserWithEmailAndPassword(auth, email, password)
     const user: AppUser = {
       id: credential.user.uid,
@@ -369,7 +394,13 @@ export async function registerUser(payload: RegisterPayload) {
       createdAt: new Date().toISOString(),
     }
 
-    await setDoc(doc(db, 'users', user.id), user)
+    try {
+      await setDoc(doc(db, 'users', user.id), user)
+    } catch (error) {
+      await deleteUser(credential.user).catch(() => undefined)
+      throw error
+    }
+
     return user
   } catch (error) {
     throw toFriendlyError(error)
