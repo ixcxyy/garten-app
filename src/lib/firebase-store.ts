@@ -133,6 +133,15 @@ function requireServices() {
 
 function toFriendlyError(error: unknown) {
   if (!(error instanceof FirebaseError)) {
+    if (
+      error instanceof Error &&
+      error.message.toLowerCase().includes('client is offline')
+    ) {
+      return new Error(
+        'Firestore ist gerade offline oder noch nicht erreichbar. Bitte pruefe deine Verbindung oder warte einen Moment und versuche es erneut.',
+      )
+    }
+
     return error instanceof Error ? error : new Error('Etwas ist schiefgelaufen.')
   }
 
@@ -233,20 +242,14 @@ function upsertUserProfile(user: AppUser) {
   })
 }
 
-async function ensureUserProfile(db: Firestore, authUser: User) {
-  const userRef = doc(db, 'users', authUser.uid)
-  const userSnapshot = await getDoc(userRef)
+function getOptimisticUserProfile(authUser: User) {
+  return toAppUser(snapshot.users.find((entry) => entry.id === authUser.uid), authUser)
+}
 
-  if (userSnapshot.exists()) {
-    const existingUser = userSnapshot.data() as AppUser
-    upsertUserProfile(existingUser)
-    return existingUser
-  }
-
-  const nextUser = toAppUser(undefined, authUser)
-  await setDoc(userRef, nextUser)
-  upsertUserProfile(nextUser)
-  return nextUser
+async function persistUserProfile(db: Firestore, user: AppUser) {
+  await setDoc(doc(db, 'users', user.id), user, {
+    merge: true,
+  })
 }
 
 function startSync() {
@@ -494,11 +497,7 @@ export async function registerUser(payload: RegisterPayload) {
   const { auth, db } = requireServices()
 
   try {
-    const usersWithUsername = await getDocs(
-      query(collection(db, 'users'), where('username', '==', username), limit(1)),
-    )
-
-    if (!usersWithUsername.empty) {
+    if (snapshot.users.some((entry) => entry.username === username)) {
       throw new Error('Dieser Username ist bereits vergeben.')
     }
 
@@ -513,9 +512,12 @@ export async function registerUser(payload: RegisterPayload) {
       createdAt: new Date().toISOString(),
     }
 
+    upsertUserProfile(user)
+
     try {
-      await setDoc(doc(db, 'users', user.id), user)
+      await persistUserProfile(db, user)
     } catch (error) {
+      setStoreError(toFriendlyError(error).message)
       await deleteUser(credential.user).catch(() => undefined)
       throw error
     }
@@ -538,7 +540,14 @@ export async function login(payload: LoginPayload) {
 
   try {
     const credential = await signInWithEmailAndPassword(auth, email, password)
-    return ensureUserProfile(db, credential.user)
+    const user = getOptimisticUserProfile(credential.user)
+    upsertUserProfile(user)
+
+    void persistUserProfile(db, user).catch((error) => {
+      setStoreError(toFriendlyError(error).message)
+    })
+
+    return user
   } catch (error) {
     throw toFriendlyError(error)
   }
@@ -549,7 +558,14 @@ export async function loginWithGoogle() {
 
   try {
     const credential = await signInWithPopup(auth, googleProvider)
-    return ensureUserProfile(db, credential.user)
+    const user = getOptimisticUserProfile(credential.user)
+    upsertUserProfile(user)
+
+    void persistUserProfile(db, user).catch((error) => {
+      setStoreError(toFriendlyError(error).message)
+    })
+
+    return user
   } catch (error) {
     throw toFriendlyError(error)
   }
