@@ -134,6 +134,10 @@ function toFriendlyError(error: unknown) {
       return new Error(
         'E-Mail/Passwort ist in Firebase Authentication noch nicht aktiviert. Aktiviere in Firebase unter Authentication > Sign-in method den Provider "Email/Password".',
       )
+    case 'auth/configuration-not-found':
+      return new Error(
+        'Firebase Authentication ist fuer dieses Web-Projekt noch nicht voll eingerichtet. Pruefe in Firebase die Werte fuer apiKey, authDomain und projectId und aktiviere unter Authentication > Sign-in method den Provider "Email/Password".',
+      )
     case 'auth/invalid-credential':
     case 'auth/user-not-found':
     case 'auth/wrong-password':
